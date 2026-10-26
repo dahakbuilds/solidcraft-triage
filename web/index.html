@@ -32,6 +32,7 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .st{font-size:11px;padding:1px 8px;border-radius:10px;white-space:nowrap}
 .st.open{background:#1a7f3733;color:var(--green)}.st.closed{background:#8957e533;color:var(--purple)}
 .reason{font-size:11px;color:var(--dim);white-space:nowrap}
+.tb{font-size:11px;color:var(--green);margin-left:6px;white-space:nowrap}
 .lbl{display:inline-block;font-size:11px;border-radius:10px;padding:1px 8px;margin:1px 3px 1px 0;background:#388bfd22;color:#79c0ff;white-space:nowrap;cursor:pointer}
 .lbl.dup{background:#f8514922;color:#ff7b72}.lbl.tri{background:#3fb95022;color:#56d364}.lbl.ver{background:#a371f722;color:#bc8cff}
 .cmt{color:var(--dim)}
@@ -49,6 +50,7 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
   <input id="q" placeholder="search title / number / labels…">
   <select id="state"><option value="all">all states</option><option value="open">open</option><option value="closed">closed</option></select>
   <select id="reason"><option value="all">any outcome</option><option value="completed">completed</option><option value="not_planned">closed as dup/not-planned</option><option value="none">still triaged</option></select>
+  <select id="triaged"><option value="all">triaged: any</option><option value="yes">triaged ✓</option><option value="no">not triaged</option></select>
   <select id="sort"><option value="updated">sort: updated</option><option value="created">sort: created</option><option value="comments">sort: comments</option><option value="number">sort: number</option></select>
   <span id="status">wasm: loading…</span>
 </header>

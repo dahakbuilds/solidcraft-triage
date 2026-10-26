@@ -66,6 +66,44 @@ async function loadIssuesGQL(repo, token) {
   return total;
 }
 
+// Find issues whose comments contain the "Triage by ..." marker, flag them in the engine.
+const TRIAGED_Q = '"Triage by" in:comments';
+async function loadTriaged(repo, token) {
+  const numbers = [];
+  if (token) {
+    const q = `query($q:String!,$cur:String){search(type:ISSUE,first:100,query:$q,after:$cur){pageInfo{hasNextPage endCursor} nodes{... on Issue{number}}}}`;
+    let cur = null;
+    for (;;) {
+      const r = await fetch('https://api.github.com/graphql', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q, variables: { q: `repo:${repo} is:issue ${TRIAGED_Q}`, cur } }),
+      });
+      if (!r.ok) throw new Error(`triaged search: ${r.status}`);
+      const j = await r.json();
+      if (j.errors) throw new Error('triaged search: ' + j.errors[0].message);
+      const s = j.data.search;
+      s.nodes.forEach(n => n && numbers.push(n.number));
+      $('status').textContent = `finding triaged… ${numbers.length}`;
+      if (!s.pageInfo.hasNextPage) break;
+      cur = s.pageInfo.endCursor;
+    }
+  } else {
+    // REST search: 1000-result cap, ~2 req/min unauthenticated
+    let page = 1, total = Infinity;
+    while (numbers.length < total && page <= 10) {
+      if (page > 1) await new Promise(r => setTimeout(r, 7000));
+      const j = await gh(`https://api.github.com/search/issues?q=${encodeURIComponent(`repo:${repo} is:issue ${TRIAGED_Q}`)}&per_page=100&page=${page}`, token);
+      total = j.total_count;
+      (j.items || []).forEach(it => numbers.push(it.number));
+      $('status').textContent = `finding triaged… ${numbers.length}/${total}`;
+      page++;
+    }
+    if (total > 1000) $('status').textContent += ' (capped at 1000 — token lifts cap)';
+  }
+  return call('triage_mark', { numbers });
+}
+
 async function loadIssues() {
   const repo = $('repo').value.trim();
   const token = $('token').value.trim() || localStorage.getItem('sct-token') || '';
@@ -93,6 +131,8 @@ async function loadIssues() {
     }
     state.loaded = true;
     $('status').textContent = `loaded ${total} items`;
+    try { await loadTriaged(repo, token); } catch (e) { console.warn('triaged search failed:', e); }
+    $('status').textContent = `loaded ${total} items`;
     refresh();
   } catch (e) {
     if (total > 0) { // keep what we got, note the error
@@ -110,6 +150,7 @@ function query() {
   return call('triage_query', {
     q: $('q').value, labels: [...state.labels], not_labels: [],
     state: $('state').value, reason: $('reason').value,
+    triaged: $('triaged').value,
     sort: $('sort').value, desc: true, offset: state.offset, limit: state.limit,
   });
 }
@@ -124,7 +165,8 @@ function refresh() {
     <td class="num"><a href="${x.u}" target="_blank">#${x.n}</a></td>
     <td><a href="${x.u}" target="_blank">${esc(x.t)}</a>
         <span class="st ${x.st}">${x.st}</span>
-        ${x.r ? `<span class="reason">· ${x.r.replace('_',' ')}</span>` : ''}</td>
+        ${x.r ? `<span class="reason">· ${x.r.replace('_',' ')}</span>` : ''}
+        ${x.tb ? '<span class="tb">✓ triaged</span>' : ''}</td>
     <td>${x.l.map(l => `<span class="lbl ${lblClass(l)}" data-lbl="${esc(l)}">${esc(l)}</span>`).join('')}</td>
     <td class="cmt">${x.c || ''}</td>
     <td class="date">${shortDate(x.ca)}</td>
@@ -133,7 +175,8 @@ function refresh() {
     '<tr><td colspan="7" class="err">no matches</td></tr>';
   const f = r.facets;
   $('stats').innerHTML = `<b>${r.filtered}</b> of <b>${r.total}</b> issues · open <b>${f.open}</b> · closed <b>${f.closed}</b>` +
-    ` · completed <b>${f.reasons.completed || 0}</b> · dup/not-planned <b>${f.reasons.not_planned || 0}</b> · untriaged <b>${f.reasons[''] || 0}</b>`;
+    ` · completed <b>${f.reasons.completed || 0}</b> · dup/not-planned <b>${f.reasons.not_planned || 0}</b> · untriaged <b>${f.reasons[''] || 0}</b>` +
+    ` · triaged-by-comment <b>${f.triaged || 0}</b>`;
   $('facets').innerHTML = f.labels.map(([name, ct]) =>
     `<span class="chip ${state.labels.has(name) ? 'on' : ''}" data-lbl="${esc(name)}">${esc(name)}<span class="ct">${ct}</span></span>`).join('');
   const pages = Math.ceil(r.filtered / state.limit);
@@ -143,7 +186,7 @@ function refresh() {
 // ---------- events ----------
 $('load').onclick = loadIssues;
 let deb; $('q').oninput = () => { clearTimeout(deb); state.offset = 0; deb = setTimeout(refresh, 200); };
-for (const id of ['state', 'reason', 'sort']) $(id).onchange = () => { state.offset = 0; refresh(); };
+for (const id of ['state', 'reason', 'triaged', 'sort']) $(id).onchange = () => { state.offset = 0; refresh(); };
 document.querySelectorAll('th[data-sort]').forEach(th => th.onclick = () => { $('sort').value = th.dataset.sort; refresh(); });
 document.addEventListener('click', e => {
   const chip = e.target.closest('[data-lbl]');

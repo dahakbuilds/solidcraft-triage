@@ -61,6 +61,7 @@ struct Row {
     cb: String, // closed_by
     au: String, // author
     u: String,  // url
+    tb: bool,   // has a "Triage by ..." comment marker
 }
 
 #[derive(Deserialize)]
@@ -77,6 +78,8 @@ struct Query {
     reason: String, // all | completed | not_planned | none
     #[serde(default)]
     sort: String, // updated | created | comments | number
+    #[serde(default)]
+    triaged: String, // all | yes | no
     #[serde(default)]
     desc: Option<bool>,
     #[serde(default)]
@@ -162,6 +165,7 @@ pub extern "C" fn triage_load(ptr: usize, len: usize) -> *const u8 {
                 cb: r.closed_by.map(|u| u.login).unwrap_or_default(),
                 au: r.user.map(|u| u.login).unwrap_or_default(),
                 u: r.html_url,
+                tb: false,
             });
         }
     });
@@ -172,6 +176,35 @@ pub extern "C" fn triage_load(ptr: usize, len: usize) -> *const u8 {
 #[no_mangle]
 pub extern "C" fn triage_reset() {
     STORE.with(|s| s.borrow_mut().rows.clear());
+}
+
+/// Input: {"numbers":[123, ...]} — flags those issues as triaged (a "Triage by ..."
+/// comment exists). Returns {"marked":N}.
+#[no_mangle]
+pub extern "C" fn triage_mark(ptr: usize, len: usize) -> *const u8 {
+    let input = read_str(ptr, len);
+    let v: serde_json::Value = match serde_json::from_str(&input) {
+        Ok(v) => v,
+        Err(e) => {
+            let msg = format!("{}", e);
+            return out_json(&serde_json::json!({"error": msg}));
+        }
+    };
+    let nums: std::collections::HashSet<u64> = v
+        .get("numbers")
+        .and_then(|n| n.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_u64()).collect())
+        .unwrap_or_default();
+    let mut marked = 0usize;
+    STORE.with(|s| {
+        for r in s.borrow_mut().rows.iter_mut() {
+            if nums.contains(&r.n) {
+                r.tb = true;
+                marked += 1;
+            }
+        }
+    });
+    out_json(&serde_json::json!({"marked": marked}))
 }
 
 /// Input: Query JSON. Output: {rows, filtered, total, facets:{labels:[[name,count]], reasons:{...}, open, closed}}
@@ -196,6 +229,12 @@ pub extern "C" fn triage_query(ptr: usize, len: usize) -> *const u8 {
             .iter()
             .filter(|r| {
                 if q.state != "all" && r.st != q.state {
+                    return false;
+                }
+                if q.triaged == "yes" && !r.tb {
+                    return false;
+                }
+                if q.triaged == "no" && r.tb {
                     return false;
                 }
                 if q.reason != "all" {
@@ -232,11 +271,15 @@ pub extern "C" fn triage_query(ptr: usize, len: usize) -> *const u8 {
         let mut reason_counts: std::collections::HashMap<&str, usize> = Default::default();
         let mut open = 0usize;
         let mut closed = 0usize;
+        let mut triaged = 0usize;
         for r in &matched {
             for l in &r.l {
                 *label_counts.entry(l.as_str()).or_insert(0) += 1;
             }
             *reason_counts.entry(r.r.as_str()).or_insert(0) += 1;
+            if r.tb {
+                triaged += 1;
+            }
             if r.st == "open" {
                 open += 1;
             } else {
@@ -268,7 +311,8 @@ pub extern "C" fn triage_query(ptr: usize, len: usize) -> *const u8 {
                 "labels": labels,
                 "reasons": reason_counts,
                 "open": open,
-                "closed": closed
+                "closed": closed,
+                "triaged": triaged
             }
         }))
     })
